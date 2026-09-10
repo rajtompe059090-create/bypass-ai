@@ -32,6 +32,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import kotlinx.coroutines.launch
 import com.example.ui.theme.*
 
 class MainActivity : ComponentActivity() {
@@ -168,12 +169,14 @@ fun MainScreen(rootNavController: NavHostController) {
     }
 }
 
-data class ChatMessage(val text: String, val isUser: Boolean)
+data class ChatMessage(val text: String, val isUser: Boolean, val isError: Boolean = false)
 
 @Composable
 fun HomeScreen(rootNavController: NavHostController) {
     var text by remember { mutableStateOf("") }
     val messages = remember { mutableStateListOf<ChatMessage>() }
+    var isLoading by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
 
     Column(
         modifier = Modifier
@@ -227,7 +230,29 @@ fun HomeScreen(rootNavController: NavHostController) {
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 items(messages) { message ->
-                    ChatBubble(message)
+                    val isLast = message == messages.last()
+                    ChatBubble(
+                        message = message,
+                        onRetry = if (message.isError && isLast) {
+                            {
+                                messages.remove(message)
+                                val lastUserMsg = messages.lastOrNull { it.isUser }
+                                if (lastUserMsg != null && !isLoading) {
+                                    isLoading = true
+                                    coroutineScope.launch {
+                                        try {
+                                            val response = generateGeminiResponse(messages.dropLast(1), lastUserMsg.text)
+                                            messages.add(ChatMessage(response, isUser = false))
+                                        } catch (e: Exception) {
+                                            messages.add(ChatMessage(e.message ?: "An error occurred", isUser = false, isError = true))
+                                        } finally {
+                                            isLoading = false
+                                        }
+                                    }
+                                }
+                            }
+                        } else null
+                    )
                 }
             }
         }
@@ -266,10 +291,22 @@ fun HomeScreen(rootNavController: NavHostController) {
                 
                 IconButton(
                     onClick = {
-                        if (text.isNotBlank()) {
-                            messages.add(ChatMessage(text, isUser = true))
-                            messages.add(ChatMessage("Demo mode: No AI API is configured yet. I received: \"$text\"", isUser = false))
+                        if (text.isNotBlank() && !isLoading) {
+                            val prompt = text
+                            messages.add(ChatMessage(prompt, isUser = true))
                             text = ""
+                            isLoading = true
+                            
+                            coroutineScope.launch {
+                                try {
+                                    val response = generateGeminiResponse(messages.dropLast(1), prompt)
+                                    messages.add(ChatMessage(response, isUser = false))
+                                } catch (e: Exception) {
+                                    messages.add(ChatMessage(e.message ?: "An error occurred", isUser = false, isError = true))
+                                } finally {
+                                    isLoading = false
+                                }
+                            }
                         }
                     },
                     modifier = Modifier
@@ -277,12 +314,20 @@ fun HomeScreen(rootNavController: NavHostController) {
                         .clip(CircleShape)
                         .background(BypassCyan.copy(alpha = 0.1f))
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Send,
-                        contentDescription = "Send",
-                        tint = BypassCyan,
-                        modifier = Modifier.size(20.dp)
-                    )
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = BypassCyan,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Send,
+                            contentDescription = "Send",
+                            tint = BypassCyan,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             }
         }
@@ -290,10 +335,10 @@ fun HomeScreen(rootNavController: NavHostController) {
 }
 
 @Composable
-fun ChatBubble(message: ChatMessage) {
+fun ChatBubble(message: ChatMessage, onRetry: (() -> Unit)? = null) {
     val align = if (message.isUser) Alignment.CenterEnd else Alignment.CenterStart
-    val bgColor = if (message.isUser) BypassCyan.copy(alpha = 0.2f) else BypassDarkSurface
-    val textColor = if (message.isUser) BypassCyan else Color.White
+    val bgColor = if (message.isError) Color(0x33FF5252) else if (message.isUser) BypassCyan.copy(alpha = 0.2f) else BypassDarkSurface
+    val textColor = if (message.isError) Color(0xFFFF5252) else if (message.isUser) BypassCyan else Color.White
     val shape = if (message.isUser) {
         RoundedCornerShape(16.dp, 16.dp, 0.dp, 16.dp)
     } else {
@@ -317,10 +362,35 @@ fun ChatBubble(message: ChatMessage) {
                 fontSize = 14.sp,
                 lineHeight = 20.sp
             )
-            if (!message.isUser) {
+            if (message.isError) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "ERROR",
+                        color = Color(0xFFFF5252),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (onRetry != null) {
+                        Text(
+                            text = "RETRY",
+                            color = Color.White,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .clickable(onClick = onRetry)
+                                .padding(4.dp)
+                        )
+                    }
+                }
+            } else if (!message.isUser) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "DEMO MODE",
+                    text = "BYPASS AI",
                     color = BypassCyan,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold
