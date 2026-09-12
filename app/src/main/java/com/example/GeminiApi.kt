@@ -1,4 +1,5 @@
-package com.example
+package com.bypass.ai
+import com.bypass.ai.BuildConfig
 
 import com.squareup.moshi.JsonClass
 import retrofit2.http.POST
